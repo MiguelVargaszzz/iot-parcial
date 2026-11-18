@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IoT Campus UNAB · Panel de control</title>
+<style>
+  :root { --bg:#f4f6f8; --card:#fff; --ink:#1d2733; --muted:#6b7785; --ok:#1f9d55; --off:#c0392b; --acc:#0b6bcb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:18px 24px; background:#0f2a44; color:#fff; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:20px; margin:0; flex:1; }
+  header a { color:#9fd0ff; }
+  header input { padding:6px 8px; border-radius:6px; border:0; width:260px; }
+  main { padding:20px; display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap:16px; }
+  .card { background:var(--card); border-radius:10px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .top { display:flex; justify-content:space-between; align-items:center; }
+  .name { font-weight:600; font-size:16px; }
+  .tag { font-size:11px; padding:2px 8px; border-radius:10px; background:#e8eef5; color:var(--muted); }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+  table { width:100%; font-size:13px; margin:10px 0; border-collapse:collapse; }
+  td { padding:2px 0; } td:last-child { text-align:right; font-variant-numeric: tabular-nums; }
+  .meta { font-size:12px; color:var(--muted); }
+  .row { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  button { border:0; border-radius:6px; padding:6px 10px; cursor:pointer; background:var(--acc); color:#fff; font-size:13px; }
+  button.on { background:var(--ok); } button.off { background:var(--off); }
+  .row input { width:80px; padding:5px; border:1px solid #ccd; border-radius:6px; }
+  #msg { position:fixed; bottom:16px; right:16px; background:#0f2a44; color:#fff; padding:8px 14px; border-radius:8px; opacity:0; transition:.3s; }
+</style>
+</head>
+<body>
+<header>
+  <h1>IoT Campus UNAB · Panel de control (retroceso)</h1>
+  <a href="/grafana/" target="_blank">Abrir Grafana →</a>
+  <input id="token" placeholder="CONTROL_TOKEN" type="password">
+</header>
+<main id="grid"></main>
+<div id="msg"></div>
+<script>
+const tok = document.getElementById('token');
+try { tok.value = localStorage.getItem('ctoken') || ''; } catch(e) {}
+tok.onchange = () => { try { localStorage.setItem('ctoken', tok.value); } catch(e) {} };
+
+function toast(t){ const m=document.getElementById('msg'); m.textContent=t; m.style.opacity=1; setTimeout(()=>m.style.opacity=0,2000); }
+
+async function send(dev, cmd){
+  const r = await fetch('/api/cmd/'+dev, {method:'POST', headers:{'Content-Type':'application/json','X-Token':tok.value}, body:JSON.stringify(cmd)});
+  toast(r.ok ? `Enviado a ${dev}: ${cmd.action}` : 'Error: '+(await r.text()));
+  setTimeout(load, 800);
+}
+function val(id){ return document.getElementById(id).value; }
+
+function card(dev, d){
+  const s=d.status||{}, last=d.last||{};
+  const online=s.online!==false, enabled=s.enabled!==false;
+  const fields=Object.entries(last).filter(([k])=>!['device','type'].includes(k));
+  const params=Object.entries(s.params||{});
+  return `<div class="card">
+    <div class="top"><span class="name"><span class="dot" style="background:${online&&enabled?'var(--ok)':'var(--off)'}"></span>${dev}</span>
+    <span class="tag">${s.type||last.type||''}</span></div>
+    <table>${fields.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join('') || '<tr><td class="meta">sin datos aún</td></tr>'}</table>
+    <div class="meta">intervalo: ${s.interval??'-'} s · offsets: ${JSON.stringify(s.offsets||{})}</div>
+    ${params.length?`<div class="meta">parámetros: ${params.map(([k,v])=>k+'='+v).join(', ')}</div>`:''}
+    <div class="row">
+      <button class="on" onclick="send('${dev}',{action:'on'})">Encender</button>
+      <button class="off" onclick="send('${dev}',{action:'off'})">Apagar</button>
+      <button onclick="send('${dev}',{action:'reset'})">Reset</button>
+    </div>
+    <div class="row">
+      <input id="i-${dev}" placeholder="seg"><button onclick="send('${dev}',{action:'set_interval',value:+val('i-${dev}')})">Intervalo</button>
+    </div>
+    <div class="row">
+      <input id="cf-${dev}" placeholder="variable"><input id="co-${dev}" placeholder="offset">
+      <button onclick="send('${dev}',{action:'calibrate',field:val('cf-${dev}'),offset:+val('co-${dev}')})">Calibrar</button>
+    </div>
+    ${params.length?`<div class="row">
+      <input id="pk-${dev}" placeholder="parámetro"><input id="pv-${dev}" placeholder="valor">
+      <button onclick="send('${dev}',{action:'set',key:val('pk-${dev}'),value:isNaN(+val('pv-${dev}'))?val('pv-${dev}'):+val('pv-${dev}')})">Ajustar</button>
+    </div>`:''}
+  </div>`;
+}
+
+let focused=false;
+document.addEventListener('focusin',e=>{ if(e.target.closest('.card')) focused=true; });
+document.addEventListener('focusout',()=>focused=false);
+async function load(){
+  if(focused) return;
+  const r=await fetch('/api/devices'); const data=await r.json();
+  document.getElementById('grid').innerHTML=Object.entries(data).map(([k,v])=>card(k,v)).join('');
+}
+load(); setInterval(load, 3000);
+</script>
+</body>
+</html>
